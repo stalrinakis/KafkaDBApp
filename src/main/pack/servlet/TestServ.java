@@ -1,0 +1,506 @@
+package main.pack.servlet;
+
+import main.pack.mapReduce.KeywordsRunner;
+import main.pack.schema.RedditPostSchema;
+import test.pack.KMeansCluster;
+import test.pack.kmeans123;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.apache.kafka.clients.producer.KafkaProducer;
+import org.apache.kafka.clients.producer.Producer;
+import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.common.serialization.ByteArraySerializer;
+import org.apache.kafka.common.serialization.StringSerializer;
+
+import javax.servlet.ServletContext;
+import javax.servlet.ServletException;
+import javax.servlet.annotation.WebServlet;
+import javax.servlet.http.HttpServlet;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+import java.io.*;
+import java.net.HttpURLConnection;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.net.URL;
+import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Map.Entry;
+import java.util.Objects;
+import java.util.Properties;
+
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
+import org.apache.avro.Schema;
+
+import org.apache.avro.file.DataFileStream;
+import org.apache.avro.file.DataFileWriter;
+import org.apache.avro.generic.GenericDatumReader;
+import org.apache.avro.generic.GenericRecord;
+import org.apache.avro.generic.GenericData;
+import org.apache.avro.generic.GenericDatumWriter;
+
+import org.apache.avro.io.BinaryEncoder;
+import org.apache.avro.io.DatumWriter;
+import org.apache.avro.io.EncoderFactory;
+
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.FSDataInputStream;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hdfs.HdfsConfiguration;
+
+
+@WebServlet("/Rposts")
+public class TestServ extends HttpServlet {
+	private static final String KAFKA_TOPIC = "test1";
+
+	private static final Schema schema = RedditPostSchema.SCHEMA;
+
+	private static final String hdfsFolderPath = "hdfs://localhost:9000/output/AvroPosts.avro"; // Replace with your
+																								// HDFS
+	// destination folder
+	private static final String mapReduceOutputPath = "hdfs://localhost:9000/KeywordStats";
+
+	public void doGet(HttpServletRequest request, HttpServletResponse response)
+			throws ServletException, IOException {
+
+		String numberOfPostsParam = request.getParameter("numberOfPosts");
+		String timeCreated = request.getParameter("timeCreated");
+		String sortOption = request.getParameter("sortOption");
+		String subreddit = request.getParameter("subreddit");
+		String[] keywords = { request.getParameter("keyword1"), request.getParameter("keyword2"),
+				request.getParameter("keyword3") };
+
+		// String avroFilePath = System.getProperty("user.dir")+
+		// "\\Data\\AvroPosts.avro";
+
+		if (numberOfPostsParam != null && !numberOfPostsParam.isEmpty()) {
+			try {
+				int numberOfPosts = Integer.parseInt(numberOfPostsParam);
+
+				List<Post> allPostsFromReddit = fetchRedditPosts(numberOfPosts, timeCreated, sortOption, subreddit,
+						keywords);
+
+				// List<GenericRecord> avroRecords = convertPostsToAvro(allPostsFromReddit,
+				// avroFilePath);
+
+				// sendAvroToKafka(avroRecords); // Replace with your local file path
+
+				convertToAvroAndUploadPostsToHDFS(allPostsFromReddit, hdfsFolderPath, mapReduceOutputPath);
+
+				List<Post> deserializedPosts = convertAvroToPost(hdfsFolderPath);
+
+
+				List<PostEntry> postEntries = new ArrayList<>();
+				
+				StringBuilder KmeansInput = new StringBuilder();
+
+				for (Post post : deserializedPosts) {
+
+					PostEntry postEntry = new PostEntry(post.id, post.title + " " + post.selftext, post.subreddit);
+
+					postEntries.add(postEntry);
+					
+					
+					KmeansInput.append(post.score).append(" ")
+			          .append(post.num_comments).append(" ")
+			          .append(post.subreddit_subscribers).append(" ")
+			          .append(post.upvoteratio).append("\n");
+				}
+
+				try {
+					KeywordsRunner.RunnerMain(new String[] { hdfsFolderPath, mapReduceOutputPath }, keywords);
+					//KMeansCluster.kmeanscl(KmeansInput);
+					kmeans123.main();
+				} catch (Exception e) {
+					e.printStackTrace();
+				}
+
+				JsonArray jsonPostsArray = new JsonArray();
+				for (Post post : deserializedPosts) {
+					JsonObject jsonPost = new JsonObject();
+					jsonPost.addProperty("title", post.getTitle());
+					jsonPost.addProperty("url", post.getUrl());
+					jsonPost.addProperty("subreddit", post.getSubreddit());
+					jsonPost.addProperty("id", post.getId());
+					jsonPost.addProperty("score", post.getScore());
+					jsonPost.addProperty("num_comments", post.getNumComments());
+					jsonPost.addProperty("is_video", post.isVideo());
+					jsonPost.addProperty("subreddit_subscribers", post.getSubredditSubscribers());
+					jsonPost.addProperty("upvote_ratio", post.getUpvoteRatio());
+					jsonPost.addProperty("author", post.getAuthor());
+					jsonPost.addProperty("selftext", post.getSelftext());
+
+					jsonPostsArray.add(jsonPost);
+				}
+
+				// Create a JSON object for the response
+				JsonObject responseData = new JsonObject();
+				responseData.add("posts", jsonPostsArray);
+
+				// Set the response content type and write the JSON response
+				response.setContentType("application/json");
+				response.getWriter().write(responseData.toString());
+
+				System.out.println("SUCCESS");
+			} catch (NumberFormatException e) {
+				// Handle the case where "numberOfPosts" is not a valid integer
+				response.setStatus(HttpServletResponse.SC_BAD_REQUEST);
+				response.getWriter().write("Invalid value for numberOfPosts");
+
+			} catch (Exception e) {
+				response.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
+				response.getWriter().write("An unexpected error occurred");
+			}
+		} else {
+			// Handle the case where "numberOfPosts" parameter is not present
+			response.setStatus(HttpServletResponse.SC_BAD_REQUEST);
+			response.getWriter().write("numberOfPosts parameter is required");
+		}
+	}
+
+	public static class Post {
+		private String title;
+		private String url;
+		private String subreddit;
+		private String id;
+		private String score;
+		private String num_comments;
+		private Boolean isVideo;
+		private String subreddit_subscribers;
+		private String upvoteratio;
+		private String author;
+		private String selftext;
+
+		public Post(String title, String url, String subreddit, String id, String score, String num_comments,
+				Boolean isVideo, String subreddit_subscribers, String upvoteratio, String author, String selftext) {
+			this.title = title;
+			this.url = url;
+			this.subreddit = subreddit;
+			this.id = id;
+			this.score = score;
+			this.num_comments = num_comments;
+			this.isVideo = isVideo;
+			this.subreddit_subscribers = subreddit_subscribers;
+			this.upvoteratio = upvoteratio;
+			this.author = author;
+			this.selftext = selftext;
+
+		}
+
+		public String getTitle() {
+			return title;
+		}
+
+		public String getUrl() {
+			return url;
+		}
+
+		public String getSubreddit() {
+			return subreddit;
+		}
+
+		public String getId() {
+			return id;
+		}
+
+		public String getScore() {
+			return score;
+		}
+
+		public String getNumComments() {
+			return num_comments;
+		}
+
+		public Boolean isVideo() {
+			return isVideo;
+		}
+
+		public String getSubredditSubscribers() {
+			return subreddit_subscribers;
+		}
+
+		public String getUpvoteRatio() {
+			return upvoteratio;
+		}
+
+		public String getAuthor() {
+			return author;
+		}
+
+		public String getSelftext() {
+			return selftext;
+		}
+
+	}
+
+	private List<Post> fetchRedditPosts(int numberOfPosts, String timeCreated, String sortOption, String subredditR,
+			String[] keywords) throws IOException {
+		List<Post> posts = new ArrayList<>();
+
+		try {
+			String redditApiUrl = "https://www.reddit.com/r/" + subredditR + "/search.json?q=title:" + keywords[0]
+					+ "+OR+" + keywords[1] + "+OR+" + keywords[2] + "+selftext:" + keywords[0] + "+OR+" + keywords[1]
+					+ "+OR+" + keywords[2] + "&restrict_sr=on&include_over_18=off&sort=" + sortOption + "&t="
+					+ timeCreated + "&limit=" + numberOfPosts;
+
+			URL Redditurl = new URL(redditApiUrl.trim());
+			System.out.println(redditApiUrl);
+			HttpURLConnection connection = (HttpURLConnection) Redditurl.openConnection();
+			connection.setRequestMethod("GET");
+
+			// Check if the response code is 429 (Too Many Requests)
+			int responseCode = connection.getResponseCode();
+			if (responseCode == 429) {
+				// Handle the 429 error here
+				System.out.println("HTTP 429 - Too Many Requests, retry again!");
+				// You can implement a retry mechanism or any other appropriate action
+				throw new IOException("HTTP 429 - Too Many Requests");
+			} else if (responseCode != 200) {
+				// Handle other non-200 responses here
+				throw new IOException("HTTP Error: " + responseCode);
+			}
+
+			InputStreamReader inputStreamReader = new InputStreamReader(connection.getInputStream());
+			BufferedReader bufferedReader = new BufferedReader(inputStreamReader);
+
+			StringBuilder responseContent = new StringBuilder();
+			String line;
+			while ((line = bufferedReader.readLine()) != null) {
+				responseContent.append(line);
+			}
+			bufferedReader.close();
+
+			// Parse Reddit API response
+			ObjectMapper objectMapper = new ObjectMapper();
+			JsonNode rootNode = objectMapper.readTree(responseContent.toString());
+			JsonNode postsNode = rootNode.path("data").path("children");
+
+			Iterator<JsonNode> iterator = postsNode.elements();
+			while (iterator.hasNext()) {
+				JsonNode postNode = iterator.next().path("data");
+				String title = postNode.path("title").asText();
+				String url = postNode.path("url").asText();
+				String subreddit = postNode.path("subreddit").asText();
+				String id = postNode.path("id").asText();
+				String score = postNode.path("score").asText();
+				String num_comments = postNode.path("num_comments").asText();
+				Boolean isVideo = postNode.path("is_video").asBoolean();
+				String subreddit_subscribers = postNode.path("subreddit_subscribers").asText();
+				String upvoteratio = postNode.path("upvote_ratio").asText();
+				String author = postNode.path("author").asText();
+				String selftext = postNode.path("selftext").asText().replaceAll("\\n", "");
+				if (selftext.isEmpty()) {
+					selftext = "No Selftext";
+				}
+
+				Post post = new Post(title, url, subreddit, id, score, num_comments, isVideo, subreddit_subscribers,
+						upvoteratio, author, selftext);
+				posts.add(post);
+			}
+
+		} catch (IOException e) {
+			e.printStackTrace();
+			throw e; // Rethrow the exception to be handled by the calling method
+		}
+		return posts;
+	}
+
+	private void convertToAvroAndUploadPostsToHDFS(List<Post> posts, String hdfsFolderPath, String KeywordsPath) {
+		try {
+			// Create a Configuration object for Hadoop
+			Configuration configuration = new Configuration();
+			configuration.set("fs.hdfs.impl", "org.apache.hadoop.hdfs.DistributedFileSystem");
+
+			// Create a FileSystem object
+			FileSystem fileSystem = FileSystem.get(new URI(hdfsFolderPath), configuration);
+
+			// Delete the existing file if it exists
+			Path hdfsFilePath = new Path(hdfsFolderPath );
+			if (fileSystem.exists(hdfsFilePath)) {
+				fileSystem.delete(hdfsFilePath, true);
+			}
+
+			if (fileSystem.exists(new Path(KeywordsPath))) {
+				fileSystem.delete(new Path(KeywordsPath), true);
+			}
+
+			// Create a DataFileWriter and write the Avro records directly to HDFS
+			try (DataFileWriter<GenericRecord> dataFileWriter = new DataFileWriter<>(
+					new GenericDatumWriter<>(schema))) {
+
+				dataFileWriter.create(schema, fileSystem.create(hdfsFilePath));
+
+				// Iterate through the list of Post objects and convert each to Avro
+				for (Post post : posts) {
+					GenericRecord avroRecord = new GenericData.Record(schema);
+
+					avroRecord.put("title", post.title);
+					avroRecord.put("url", post.url);
+					avroRecord.put("subreddit", post.subreddit);
+					avroRecord.put("id", post.id);
+					avroRecord.put("score", post.score);
+					avroRecord.put("numComments", post.num_comments);
+					avroRecord.put("video", post.isVideo);
+					avroRecord.put("subredditSubscribers", post.subreddit_subscribers);
+					avroRecord.put("upvoteRatio", post.upvoteratio);
+					avroRecord.put("author", post.author);
+					avroRecord.put("selftext", post.selftext);
+
+					// Append the Avro record to the Avro file in HDFS
+					dataFileWriter.append(avroRecord);
+				}
+			}
+			System.out.println("AvroPosts uploaded to HDFS successfully!");
+		} catch (IOException | URISyntaxException e) {
+			e.printStackTrace();
+		}
+	}
+
+	public static List<Post> convertAvroToPost(String hdfsFilePath) {
+		List<Post> posts = new ArrayList<>();
+
+		Configuration conf = new HdfsConfiguration();
+
+		try {
+			FileSystem fs = FileSystem.get(URI.create(hdfsFilePath), conf);
+
+			try (FSDataInputStream inputStream = fs.open(new Path(hdfsFilePath));
+					DataFileStream<GenericRecord> dataFileStream = new DataFileStream<>(inputStream,
+							new GenericDatumReader<>(schema))) {
+
+				for (GenericRecord avroRecord : dataFileStream) {
+					Post post = avroRecordToPost(avroRecord);
+					posts.add(post);
+				}
+			}
+
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+
+		return posts;
+	}
+
+	public static Post avroRecordToPost(GenericRecord avroRecord) {
+		String title = avroRecord.get("title").toString();
+		String url = avroRecord.get("url").toString();
+		String subreddit = avroRecord.get("subreddit").toString();
+		String id = avroRecord.get("id").toString();
+		String score = avroRecord.get("score").toString();
+		String num_comments = avroRecord.get("numComments").toString();
+		Boolean isVideo = (Boolean) avroRecord.get("video");
+		String subreddit_subscribers = avroRecord.get("subredditSubscribers").toString();
+		String upvoteratio = avroRecord.get("upvoteRatio").toString();
+		String author = avroRecord.get("author").toString();
+		String selftext = avroRecord.get("selftext").toString();
+
+		return new Post(title, url, subreddit, id, score, num_comments, isVideo, subreddit_subscribers, upvoteratio,
+				author, selftext);
+	}
+
+	private static void sendAvroToKafka(List<GenericRecord> avroRecords) {
+		Properties props = new Properties();
+		props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
+		props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
+		props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
+		props.put("acks", "all");
+		props.put("retries", 0);
+		props.put("batch.size", 16384);
+		props.put("linger.ms", 1);
+		props.put("buffer.memory", 33554432);
+
+		try (Producer<String, byte[]> producer = new KafkaProducer<>(props)) {
+
+			for (GenericRecord avroRecord : avroRecords) {
+				// Serialize the Avro record to bytes
+				byte[] avroBytes = serializeAvroRecord(avroRecord);
+
+				// Extract 'id' field from AvroRecord and use it as the string key
+				String postId = avroRecord.get("id").toString();
+
+				// Send the serialized Avro record as bytes to Kafka
+				producer.send(new ProducerRecord<>(KAFKA_TOPIC, postId, avroBytes));
+
+			}
+
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+	}
+
+	private static byte[] serializeAvroRecord(GenericRecord avroRecord) throws IOException {
+		ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
+		BinaryEncoder binaryEncoder = EncoderFactory.get().binaryEncoder(byteArrayOutputStream, null);
+		DatumWriter<GenericRecord> datumWriter = new GenericDatumWriter<>(schema);
+		datumWriter.write(avroRecord, binaryEncoder);
+		binaryEncoder.flush();
+		byteArrayOutputStream.close();
+		return byteArrayOutputStream.toByteArray();
+	}
+
+	public static List<String> ReadWords() {
+		String fileName = "Data//unique_words.txt";
+		List<String> wordList = new ArrayList<>();
+
+		try (BufferedReader br = new BufferedReader(new FileReader(fileName))) {
+			String line;
+			while ((line = br.readLine()) != null) {
+				String[] words = line.split("\\s+"); // Split line into words using whitespace as delimiter
+				for (String word : words) {
+					// Add word to the list
+					wordList.add(word);
+				}
+			}
+
+		} catch (IOException e) {
+			System.err.println("Error reading file: " + e.getMessage());
+		}
+		return wordList;
+	}
+
+	public class PostEntry {
+		private String id;
+		private String text;
+		private String category;
+
+		public PostEntry(String id, String text, String category) {
+			this.id = id;
+			this.text = text;
+			this.category = category;
+		}
+
+		public String getId() {
+			return id;
+		}
+
+		public void setId(String id) {
+			this.id = id;
+		}
+
+		public String getText() {
+			return text;
+		}
+
+		public void setText(String text) {
+			this.text = text;
+		}
+
+		public String getCategory() {
+			return category;
+		}
+
+		public void setCategory(String category) {
+			this.category = category;
+		}
+	}
+
+}

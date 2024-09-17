@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="test.css">
+    <link rel="icon" href="data:;base64,iVBORw0KGgo=">
+
+    <script src="test.js"></script>
+   <!-- <script src="
+https://cdn.jsdelivr.net/npm/avsc@5.7.7/etc/browser/avsc.min.js
+"></script> -->
+
+    <title>Reddit Posts</title>
+</head>
+
+<body>
+    <div class="container">
+        <h1>Reddit Posts</h1>
+        <form id="redditForm">
+            <label for="numberOfPosts">Number of Posts:</label>
+            <input type="number" id="numberOfPosts" name="numberOfPosts" value="1" min="1" max="200" required>
+
+            <label for="timeCreated">Time created:</label>
+            <select id="timeCreated" name="timeCreated">
+                <option value="hour">Hour</option>
+                <option value="day">Day</option>
+                <option value="week">Week</option>
+                <option value="month">Month</option>
+                <option value="year">Year</option>
+                <option value="all" selected>All</option>
+            </select>
+
+            <label for="sortOption">Sort Option:</label>
+            <select id="sortOption" name="sortOption">
+                <option value="hot">Hot</option>
+                <option value="new">New</option>
+                <option value="top" selected>Top</option>
+                <option value="rising">Rising</option>
+            </select>
+
+            <label for="subreddit">Subreddit:</label>
+            <input type="text" id="subreddit" name="subreddit" value="all" required>
+
+            <label for="keyword1">Keyword 1:</label>
+            <input type="text" id="keyword1" name="keyword1" value="python" required>
+
+            <label for="keyword2">Keyword 2:</label>
+            <input type="text" id="keyword2" name="keyword2" value="python" required>
+
+            <label for="keyword3">Keyword 3:</label>
+            <input type="text" id="keyword3" name="keyword3" value="python"required>
+
+            <button type="button" onclick="fetchRedditPosts()">Fetch Posts</button>
+        </form>
+
+
+        <div id="postTabs" style="display: none;">
+            <div class="tabs"  >
+                <div class="tab" onclick="showTab('JsonData')">JsonData</div>
+                <div class="tab" onclick="showTab('Statistics')">Statistics</div>
+            </div>
+
+            <div id="JsonData" class="tab-content" >jsonDataTable
+                <table id="jsonDataTable">
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Title</th>
+                            <th>Id</th>
+                            <th>Subreddit</th>
+                            <th>Text</th>
+                            <th>Author</th>
+                            <th>Score</th>
+                            <th>Total Comments</th>
+                            <th>Has a Video</th>
+                            <th>Upvote Ratio</th>
+                            <th>Subreddit subscribers</th>
+                            <th>Url</th>
+                        </tr>
+                    </thead>
+                    <tbody id="jsonBody">
+                        <!-- Table content will be generated dynamically from JavaScript -->
+                    </tbody>
+                </table>
+            </div>
+
+
+            <div id="Statistics" class="tab-content">
+                <!-- Your statistics table goes here -->
+            </div>
+
+        </div>
+
+    </div>
+
+
+   
+
+
+
+
+</body>
+
+</html>
