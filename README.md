@@ -11,4 +11,4 @@ Creates a JSON response containing the processed post data and sends it back to 
 Includes methods for interacting with Kafka, though these appear to be unused in the main flow.
 Handles various exceptions and error cases, including rate limiting from the Reddit API.
 
-The servlet integrates several big data technologies and APIs, including Hadoop, Avro, Kafka, and the Reddit API, to fetch, process, and analyze Reddit post data. It seems to be part of a larger system for analyzing Reddit content, possibly for trend analysis or content categorization.
+The servlet integrates several big data technologies and APIs, including Hadoop, Avro, Kafka, and the Reddit API, to fetch, process, and analyze Reddit post data for content categorization.
